@@ -542,7 +542,7 @@
   </div>
 </div>
 <script>
-const API_BASE = "https://script.google.com/macros/s/AKfycbxUSldieyEhqaIUOKraCduP8Kw-LcOE1UaG6BzayusJstZYOzJ84EH7k-GjnVzoEH9GeA/exec";
+const API_BASE = "https://script.google.com/macros/s/AKfycbxgLlcqyD-8oJugL7rDF_fqj59FIQIkYaREG8hOfkD4xGuxAgob9HFqrycfYLTq5roumw/exec";
 const MASTER_NAME = "Jasper";
 const ORDER_MODE_DROPSHIP = "dropshipment";
 const ORDER_MODE_INVOICE = "invoice";
@@ -585,7 +585,7 @@ function api_(qs){return jsonp(`${API_BASE}${API_BASE.includes("?")?"&":"?"}${qs
 function isMasterLogin(){return loginType===LOGIN_TYPE_MASTER;}
 function isSupplierLogin(){return loginType===LOGIN_TYPE_SUPPLIER;}
 function isAccountmanagerLogin(){return loginType===LOGIN_TYPE_ACCOUNTMANAGER;}
-function canCreateOrders(){return isMasterLogin()||isAccountmanagerLogin();}
+function canCreateOrders(){return isMasterLogin()&&isDropshipMode();}
 function isDropshipMode(){return currentMode===ORDER_MODE_DROPSHIP;}
 function isInvoiceMode(){return currentMode===ORDER_MODE_INVOICE;}
 function isWebshopMode(){return currentMode===ORDER_MODE_WEBSHOP;}
@@ -814,18 +814,18 @@ async function addItem_(){
 async function saveItemsToBackend_(){
   if(!selected) return;
   $("itemsMsg").textContent="Saving...";
-  let qs=`action=save_items&supplierKey=${encodeURIComponent(supplierKey)}&mode=${encodeURIComponent(ORDER_MODE_INVOICE)}&rowId=${encodeURIComponent(selected.rowId)}`;
+  let qs=`action=save_items&supplierKey=${encodeURIComponent(supplierKey)}&mode=${encodeURIComponent(ORDER_MODE_INVOICE)}&${orderAddressQS_(selected)}`;
   for(let i=0;i<10;i++) qs+=`&Product${i+1}=${encodeURIComponent(currentItems[i]||"")}`;
   const data=await api_(qs).catch(()=>null);
   if(!data?.ok){$("itemsMsg").innerHTML=`<span style="color:var(--bad)">${escapeHTML(data?.error||"Save failed.")}</span>`;return;}
   $("itemsMsg").innerHTML='<span style="color:var(--ok)">Saved.</span>';
   for(let i=0;i<10;i++) selected[`Product ${i+1}`]=currentItems[i]||"";
-  const idx=orders.findIndex(o=>Number(o.rowId)===Number(selected.rowId));
+  const idx=orders.findIndex(o=>orderKey_(o)===orderKey_(selected));
   if(idx>=0) orders[idx]=selected;
 }
 function parseNotes_(order){
   const notes=[];
-  for(let i=1;i<=10;i++){
+  for(let i=1;i<=20;i++){
     const raw=getAny(order,[`Note ${i}`,`Note${i}`]);
     if(!raw) continue;
     const idx=raw.lastIndexOf(" - ");
@@ -851,13 +851,15 @@ async function addNote_(){
   const text=$("newNoteText").value.trim();
   if(!text) return;
   const existing=parseNotes_(selected);
-  if(existing.length>=10){$("notesMsg").innerHTML="<span style='color:var(--warn)'>Maximum of 10 notes reached.</span>";return;}
-  const author=getAny(selected,["Accountmanager"])||accountmanagerName||"";
+  if(existing.length>=20){$("notesMsg").innerHTML="<span style='color:var(--warn)'>Maximum of 20 notes reached.</span>";return;}
+  // Auteur wordt server-side afgeleid van de ingelogde persoon (master/"Jasper" of
+  // de accountmanager) ‚Äî hier alleen voor de optimistische UI-update.
+  const author=isMasterLogin()?MASTER_NAME:accountmanagerName;
   $("notesMsg").textContent="Saving...";
-  const data=await api_(`action=add_note&supplierKey=${encodeURIComponent(supplierKey)}&mode=${encodeURIComponent(ORDER_MODE_INVOICE)}&rowId=${encodeURIComponent(selected.rowId)}&Note=${encodeURIComponent(text)}&Accountmanager=${encodeURIComponent(author)}`).catch(()=>null);
+  const data=await api_(`action=add_note&supplierKey=${encodeURIComponent(supplierKey)}&mode=${encodeURIComponent(ORDER_MODE_INVOICE)}&${orderAddressQS_(selected)}&Note=${encodeURIComponent(text)}`).catch(()=>null);
   if(!data?.ok){$("notesMsg").innerHTML=`<span style="color:var(--bad)">${escapeHTML(data?.error||"Save failed.")}</span>`;return;}
   selected[`Note ${existing.length+1}`]=`${text} - ${author}`;
-  const idx=orders.findIndex(o=>Number(o.rowId)===Number(selected.rowId));
+  const idx=orders.findIndex(o=>orderKey_(o)===orderKey_(selected));
   if(idx>=0) orders[idx]=selected;
   $("newNoteText").value="";
   $("notesMsg").innerHTML='<span style="color:var(--ok)">Note added.</span>';
@@ -870,26 +872,27 @@ async function savePhone_(){
   if(!local){$("phoneMsg").innerHTML="<span style='color:var(--warn)'>Enter a phone number.</span>";return;}
   const phone=combinePhone_(dial,local);
   $("phoneMsg").textContent="Saving...";
-  const data=await api_(`action=update_phone&supplierKey=${encodeURIComponent(supplierKey)}&rowId=${encodeURIComponent(selected.rowId)}&Phone=${encodeURIComponent(phone)}`).catch(()=>null);
+  const data=await api_(`action=update_phone&supplierKey=${encodeURIComponent(supplierKey)}&${orderAddressQS_(selected)}&Phone=${encodeURIComponent(phone)}`).catch(()=>null);
   if(!data?.ok){$("phoneMsg").innerHTML="<span style='color:var(--bad)'>Save failed.</span>";return;}
   selected["Phone"]=phone;
-  const idx=orders.findIndex(o=>Number(o.rowId)===Number(selected.rowId));
+  const idx=orders.findIndex(o=>orderKey_(o)===orderKey_(selected));
   if(idx>=0) orders[idx].Phone=phone;
   $("phoneMsg").innerHTML='<span style="color:var(--ok)">Saved.</span>';
 }
-async function setCompleted(rowId, val){
+async function setCompleted(o, val){
   const modeToUse=isAccountmanagerLogin()?ORDER_MODE_INVOICE:currentMode;
-  const data=await api_(`action=complete&supplierKey=${encodeURIComponent(supplierKey)}&rowId=${encodeURIComponent(rowId)}&Completed=${encodeURIComponent(val?"TRUE":"FALSE")}&mode=${encodeURIComponent(modeToUse)}`).catch(()=>null);
+  const data=await api_(`action=complete&supplierKey=${encodeURIComponent(supplierKey)}&${orderAddressQS_(o)}&Completed=${encodeURIComponent(val?"TRUE":"FALSE")}&mode=${encodeURIComponent(modeToUse)}`).catch(()=>null);
   return data?.ok?{ok:true}:{ok:false};
 }
-async function toggleOrderCompleted_(rowId, checkbox){
+async function toggleOrderCompleted_(key, checkbox){
+  const o=orders.find(x=>orderKey_(x)===key);
+  if(!o) return;
   checkbox.disabled=true;
-  const res=await setCompleted(rowId, checkbox.checked);
+  const res=await setCompleted(o, checkbox.checked);
   checkbox.disabled=false;
   if(!res.ok){checkbox.checked=!checkbox.checked;return;}
-  const o=orders.find(x=>Number(x.rowId)===rowId);
-  if(o) o.Completed=checkbox.checked?"TRUE":"FALSE";
-  if(selected && Number(selected.rowId)===rowId) selected.Completed=o?o.Completed:selected.Completed;
+  o.Completed=checkbox.checked?"TRUE":"FALSE";
+  if(selected && orderKey_(selected)===key) selected.Completed=o.Completed;
   renderOrders();
 }
 function supplierDraftFromLang_(lang){const t=findTpl_(supplierTemplates, lang)||{subject:"",body:""};return {subject:applyTokens(t.subject), body:applyTokens(t.body)};}
@@ -1003,9 +1006,9 @@ function applyModeUI_(){
   $("modeWebshopBtn").classList.toggle("active", isWebshopMode());
   $("modeInvoiceBtn").classList.toggle("active", isInvoiceMode());
   $("supplierBlock").classList.toggle("hidden", !isDropshipMode());
-  $("primaryOrderCaption").classList.toggle("hidden", !(isDropshipMode()||isWebshopMode()));
-  $("primaryOrderLabel").classList.toggle("hidden", !(isDropshipMode()||isWebshopMode()));
-  $("primaryOrderCaption").textContent = isWebshopMode() ? "Webshop order" : "Dropshipment order";
+  $("primaryOrderCaption").classList.remove("hidden");
+  $("primaryOrderLabel").classList.remove("hidden");
+  $("primaryOrderCaption").textContent = isDropshipMode() ? "Dropshipment order" : "Description";
   $("customerMailBox").classList.toggle("hidden", !(isMasterLogin() && isDropshipMode()));
   $("supplierMailBox").classList.toggle("hidden", !(isMasterLogin() && isDropshipMode()));
   $("dropshipMailGrid").classList.toggle("hidden", !isDropshipMode());
@@ -1023,8 +1026,9 @@ function applyModeUI_(){
   $("dropshipEditorsWrap").classList.toggle("hidden", !(isMasterLogin() && isDropshipMode()));
   $("mailLogSection").classList.toggle("hidden", !(isMasterLogin() || isAccountmanagerLogin()));
   $("completedWrap").classList.remove("hidden");
-  $("contactsWrap").classList.toggle("hidden", !(invoiceLike && (isMasterLogin() || isAccountmanagerLogin())));
-  $("newOrderBtn").title=invoiceLike?"Add invoice order":"Add new order";
+  $("contactsWrap").classList.add("hidden");
+  $("newOrderBtn").title="Add new order";
+  $("newOrderBtn").classList.toggle("hidden", !canCreateOrders());
   $("surfOrderCaption").textContent=invoiceLike?"Invoice":"Surfcenter order";
   $("newInvoiceOrderLabel").textContent="Invoice";
 }
@@ -1072,30 +1076,36 @@ function renderOrders(){
       const mail=isSupplierLogin()?"":getAny(o,["Mail Customer","MailCustomer"]);
       const thirdLine=isDropshipMode()
         ? (getAny(o,["Dropshipment order","DropshipmentOrder","Order ID","OrderID"])||getAny(o,["Surfcenter order","SurfcenterOrder"]))
-        : isWebshopMode()
-        ? (getAny(o,["Webshop order","WebshopOrder"])||getAny(o,["Surfcenter order","SurfcenterOrder"]))
-        : getAny(o,["Surfcenter order","SurfcenterOrder"]);
+        : (getAny(o,["Description"])||getAny(o,["Surfcenter order","SurfcenterOrder"]));
       const lang=getAny(o,["Language"]);
       const flag=lang?langFlag_(lang):"";
       const fs=o.FulfillmentStatus;
       const fsBadge=(fs && fs.kind!=="unknown" && fs.label)?`<span class="stockBadge ${fulfillmentBadgeClass_(fs.kind)}" style="margin-top:4px">${escapeHTML(fs.label)}</span>`:"";
+      const key=orderKey_(o);
       const completedCell=canToggleCompleted
-        ? `<input type="checkbox" class="completedCheckbox" data-toggle-completed="${escapeHTML(o.rowId)}" ${isTruthy(o.Completed)?"checked":""} />`
+        ? `<input type="checkbox" class="completedCheckbox" data-toggle-completed="${escapeHTML(key)}" ${isTruthy(o.Completed)?"checked":""} />`
         : (isTruthy(o.Completed)?'<span class="checkPill yes">Yes</span>':'<span class="checkPill">-</span>');
-      tr.innerHTML=`<td><div style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${flag?`<span style="margin-right:6px;font-weight:400">${flag}</span>`:""}${escapeHTML(getAny(o,["Customer"]))}</div>${mail?`<div class="smallLine">${escapeHTML(mail)}</div>`:""}${thirdLine?`<div class="smallLine">${escapeHTML(thirdLine)}</div>`:""}${fsBadge}</td><td class="statusCell"><div class="statusWrap"><span class="status ${trackingComplete(o)?"ready":"missing"}"><span class="dot"></span>${trackingComplete(o)?"Complete":"Missing tracking"}</span></div></td><td><div class="actionsCell"><button class="btn openBtn" data-open="${escapeHTML(o.rowId)}">Open</button></div></td><td class="completedCell">${completedCell}</td>`;
+      tr.innerHTML=`<td><div style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${flag?`<span style="margin-right:6px;font-weight:400">${flag}</span>`:""}${escapeHTML(getAny(o,["Customer"]))}</div>${mail?`<div class="smallLine">${escapeHTML(mail)}</div>`:""}${thirdLine?`<div class="smallLine">${escapeHTML(thirdLine)}</div>`:""}${fsBadge}</td><td class="statusCell"><div class="statusWrap"><span class="status ${trackingComplete(o)?"ready":"missing"}"><span class="dot"></span>${trackingComplete(o)?"Complete":"Missing tracking"}</span></div></td><td><div class="actionsCell"><button class="btn openBtn" data-open="${escapeHTML(key)}">Open</button></div></td><td class="completedCell">${completedCell}</td>`;
       target.appendChild(tr);
     });
   };
   draw($("tbodyOpen"),openList);
   draw($("tbodyCompleted"),doneList);
-  document.querySelectorAll("button[data-open]").forEach(btn=>btn.addEventListener("click",()=>openRow(Number(btn.dataset.open))));
+  document.querySelectorAll("button[data-open]").forEach(btn=>btn.addEventListener("click",()=>openRow(btn.dataset.open)));
   document.querySelectorAll("input[data-toggle-completed]").forEach(cb=>cb.addEventListener("click",e=>e.stopPropagation()));
-  document.querySelectorAll("input[data-toggle-completed]").forEach(cb=>cb.addEventListener("change",()=>toggleOrderCompleted_(Number(cb.dataset.toggleCompleted),cb)));
-  renderContacts_();
+  document.querySelectorAll("input[data-toggle-completed]").forEach(cb=>cb.addEventListener("change",()=>toggleOrderCompleted_(cb.dataset.toggleCompleted,cb)));
 }
-async function openRow(rowId){
+function orderKey_(o){ return (o && Number(o.rowId)>0) ? ("row:"+o.rowId) : ("so:"+getAny(o,["Surfcenter order","SurfcenterOrder"])); }
+// Dropship-orders worden nog geadresseerd op rowId; Invoice/Webshop-orders komen
+// nu uit SalesOrders (geen vaste rij) en worden geadresseerd op Surfcenter order.
+function orderAddressQS_(o){
+  return (o && Number(o.rowId)>0)
+    ? `rowId=${encodeURIComponent(o.rowId)}`
+    : `surfOrder=${encodeURIComponent(getAny(o,["Surfcenter order","SurfcenterOrder"]))}`;
+}
+async function openRow(key){
   clearActiveMailButtons_();
-  selected=orders.find(x=>Number(x.rowId)===rowId);
+  selected=orders.find(o=>orderKey_(o)===key);
   if(!selected)return;
   $("customerLabel").textContent=getAny(selected,["Customer"])||"-";
   $("customerMailLine").textContent=isSupplierLogin()?"":(getAny(selected,["Mail Customer","MailCustomer"])||"");
@@ -1103,9 +1113,9 @@ async function openRow(rowId){
   $("supplierKeyLine").textContent=getAny(selected,["Supplier KEY","SupplierKey"])||"";
   $("accountmanagerLabel").textContent=getAny(selected,["Accountmanager"])||accountmanagerName||"-";
   $("accountmanagerMailLine").textContent=getAny(selected,["Mail Accountmanager","MailAccountmanager"])||accountmanagerMail||"";
-  $("primaryOrderLabel").textContent=isWebshopMode()
-    ? (getAny(selected,["Webshop order","WebshopOrder"])||"-")
-    : (getAny(selected,["Dropshipment order","DropshipmentOrder","Order ID","OrderID"])||"-");
+  $("primaryOrderLabel").textContent=isDropshipMode()
+    ? (getAny(selected,["Dropshipment order","DropshipmentOrder","Order ID","OrderID"])||"-")
+    : (getAny(selected,["Description"])||"-");
   $("surfOrderLabel").textContent=getAny(selected,["Surfcenter order","SurfcenterOrder"])||"-";
   $("carrier").value=getAny(selected,["Carrier"])||"";
   $("trackingNumber").value=getAny(selected,["Trackingnumber","Tracking Number"])||"";
@@ -1174,7 +1184,8 @@ async function save(){
     return;
   }
   const modeToUse=isAccountmanagerLogin()?ORDER_MODE_INVOICE:currentMode;
-  const data=await jsonp(`${API_BASE}?action=update&rowId=${encodeURIComponent(selected.rowId)}&supplier=${encodeURIComponent(supplier)}&supplierKey=${encodeURIComponent(supplierKey)}&mode=${encodeURIComponent(modeToUse)}&Carrier=${encodeURIComponent(Carrier)}&Trackingnumber=${encodeURIComponent(Trackingnumber)}&Trackinglink=${encodeURIComponent(Trackinglink)}`).catch(()=>null);
+  const addr=orderAddressQS_(selected);
+  const data=await jsonp(`${API_BASE}?action=update&${addr}&supplier=${encodeURIComponent(supplier)}&supplierKey=${encodeURIComponent(supplierKey)}&mode=${encodeURIComponent(modeToUse)}&Carrier=${encodeURIComponent(Carrier)}&Trackingnumber=${encodeURIComponent(Trackingnumber)}&Trackinglink=${encodeURIComponent(Trackinglink)}`).catch(()=>null);
   if(!data?.ok){
     $("msg").innerHTML="<span style='color:var(--bad)'>Save failed.</span>";
     return;
@@ -1182,145 +1193,29 @@ async function save(){
   $("msg").innerHTML="<span style='color:var(--ok)'>Saved.</span>";
   await loadOrders();
 }
-function buildContacts_(){
-  const map=new Map();
-  orders.forEach(o=>{
-    const name=getAny(o,["Customer"]);
-    if(!name) return;
-    const mail=getAny(o,["Mail Customer","MailCustomer"]);
-    const key=(name+"|"+mail).toLowerCase();
-    if(map.has(key)) return;
-    map.set(key,{
-      Customer:name,
-      MailCustomer:mail,
-      Phone:getAny(o,["Phone","WhatsApp","Phone Number","PhoneNumber"]),
-      Accountmanager:getAny(o,["Accountmanager"])||accountmanagerName,
-      Language:getAny(o,["Language"])||"English"
-    });
-  });
-  return Array.from(map.values());
-}
-function fillInvoiceCreateFieldsFromContact_(c){
-  $("newInvoiceCustomer").value=c.Customer||"";
-  $("newInvoiceMailCustomer").value=c.MailCustomer||"";
-  $("newInvoiceLanguage").value=c.Language||"English";
-  if(isMasterLogin() && c.Accountmanager){
-    const opt=Array.from($("newInvoiceAccountmanagerSelect").options).find(o=>o.value.toLowerCase()===c.Accountmanager.toLowerCase());
-    if(opt) $("newInvoiceAccountmanagerSelect").value=opt.value;
-  }
-  if(c.Phone){
-    const split=splitPhoneForEdit_(c.Phone);
-    $("newInvoicePhoneCountry").value=split.dial;
-    $("newInvoicePhoneNumber").value=split.local;
-  }
-}
-function openCreateModalForContact_(c){
-  prepareCreateModal_();
-  fillInvoiceCreateFieldsFromContact_(c);
-  $("newOrderModal").classList.remove("hidden");
-  $("newInvoiceSurfOrder").focus();
-}
-function renderContacts_(){
-  const wrap=$("contactsList");
-  if(!wrap) return;
-  const q=($("contactsSearch").value||"").trim().toLowerCase();
-  const contacts=buildContacts_().filter(c=>!q||`${c.Customer} ${c.MailCustomer} ${c.Accountmanager}`.toLowerCase().includes(q));
-  wrap.innerHTML="";
-  if(!contacts.length){wrap.innerHTML='<div class="muted" style="font-size:13px">No contacts yet.</div>';return;}
-  contacts.forEach((c,i)=>{
-    const row=document.createElement("div");
-    row.className="savedTemplateRow";
-    const metaBits=[c.MailCustomer,c.Phone,isMasterLogin()?c.Accountmanager:""].filter(Boolean);
-    row.innerHTML=`<div class="savedLeft"><div style="min-width:0"><div class="tplName">${escapeHTML(c.Customer)}</div><div class="tplMeta">${escapeHTML(metaBits.join(" - "))}</div></div></div><button class="btn openBtn" type="button" data-contact-new="${i}">New order</button>`;
-    wrap.appendChild(row);
-  });
-  wrap.querySelectorAll("button[data-contact-new]").forEach(btn=>btn.addEventListener("click",()=>openCreateModalForContact_(contacts[Number(btn.dataset.contactNew)])));
-}
-function checkDuplicateCustomer_(){
-  const hint=$("newInvoiceDuplicateHint");
-  const name=$("newInvoiceCustomer").value.trim().toLowerCase();
-  const mail=$("newInvoiceMailCustomer").value.trim().toLowerCase();
-  if(!name && !mail){hint.innerHTML="";return;}
-  const match=buildContacts_().find(c=>(name && c.Customer.toLowerCase()===name)||(mail && c.MailCustomer.toLowerCase()===mail));
-  if(!match){hint.innerHTML="";return;}
-  hint.innerHTML=`<span style="color:var(--warn)">Existing customer: ${escapeHTML(match.Customer)}${match.MailCustomer?" ("+escapeHTML(match.MailCustomer)+")":""}.</span> <button class="btn small" type="button" id="useDuplicateBtn">Use these details</button>`;
-  $("useDuplicateBtn").addEventListener("click",()=>{
-    fillInvoiceCreateFieldsFromContact_(match);
-    hint.innerHTML="";
-    $("newInvoiceSurfOrder").focus();
-  });
-}
-function checkDuplicateOrderNumber_(){
-  const hint=$("newInvoiceOrderNumberHint");
-  const val=$("newInvoiceSurfOrder").value.trim().toLowerCase();
-  if(!val){hint.innerHTML="";return;}
-  const match=orders.find(o=>getAny(o,["Surfcenter order","SurfcenterOrder"]).toLowerCase()===val);
-  hint.innerHTML=match?`<span style="color:var(--warn)">This number is already used for ${escapeHTML(getAny(match,["Customer"]))}.</span>`:"";
-}
 function prepareCreateModal_(){
   $("createMsg").textContent="";
-  $("newInvoiceDuplicateHint").innerHTML="";
-  $("newInvoiceOrderNumberHint").innerHTML="";
-  const invoiceLike = isInvoiceMode() || isAccountmanagerLogin();
-  $("newOrderModalTitle").textContent=invoiceLike?"New invoice order":(isWebshopMode()?"New own-stock order":"New order");
-  $("dropshipCreateFields").classList.toggle("hidden",!(isDropshipMode() && !isAccountmanagerLogin()));
-  $("webshopCreateFields").classList.toggle("hidden",!isWebshopMode());
-  $("invoiceCreateFields").classList.toggle("hidden",!invoiceLike);
-  $("newInvoiceAccountmanagerStaticWrap").classList.toggle("hidden",!isAccountmanagerLogin());
-  $("newInvoiceAccountmanagerSelectWrap").classList.toggle("hidden",!isMasterLogin());
-  if(isAccountmanagerLogin()) $("newInvoiceAccountmanager").value=accountmanagerName||"";
-  if(invoiceLike){
-    $("newInvoiceCustomer").value="";
-    $("newInvoiceMailCustomer").value="";
-    $("newInvoiceSurfOrder").value="";
-    $("newInvoiceLanguage").value="English";
-    $("newInvoicePhoneCountry").value="31";
-    $("newInvoicePhoneNumber").value="";
-  }
+  $("newOrderModalTitle").textContent="New order";
+  $("dropshipCreateFields").classList.remove("hidden");
+  $("webshopCreateFields").classList.add("hidden");
+  $("invoiceCreateFields").classList.add("hidden");
 }
 async function createOrder(){
   if(!canCreateOrders()) return;
   $("createBtn").disabled=true;
   $("createMsg").textContent="Adding...";
-  const modeToUse=isAccountmanagerLogin()?ORDER_MODE_INVOICE:currentMode;
-  let url=`${API_BASE}?action=create&supplierKey=${encodeURIComponent(supplierKey)}&mode=${encodeURIComponent(modeToUse)}`;
-  if(isDropshipMode() && !isAccountmanagerLogin()){
-    const Customer=$("newCustomer").value.trim();
-    const MailCustomer=$("newMailCustomer").value.trim();
-    const Supplier=$("newSupplier").value;
-    const DropshipmentOrder=$("newDropOrder").value.trim();
-    const SurfcenterOrder=$("newSurfOrder").value.trim();
-    if(!Customer||!MailCustomer||!Supplier||!DropshipmentOrder||!SurfcenterOrder){
-      $("createMsg").innerHTML="<span style='color:var(--warn)'>Please fill all fields.</span>";
-      $("createBtn").disabled=false;
-      return;
-    }
-    url+=`&Customer=${encodeURIComponent(Customer)}&MailCustomer=${encodeURIComponent(MailCustomer)}&Supplier=${encodeURIComponent(Supplier)}&DropshipmentOrder=${encodeURIComponent(DropshipmentOrder)}&SurfcenterOrder=${encodeURIComponent(SurfcenterOrder)}`;
-  } else if(isWebshopMode()){
-    const Customer=$("newWebshopCustomer").value.trim();
-    const MailCustomer=$("newWebshopMailCustomer").value.trim();
-    const WebshopOrder=$("newWebshopOrder").value.trim();
-    const SurfcenterOrder=$("newWebshopSurfOrder").value.trim();
-    if(!Customer||!MailCustomer||!SurfcenterOrder){
-      $("createMsg").innerHTML="<span style='color:var(--warn)'>Please fill all fields.</span>";
-      $("createBtn").disabled=false;
-      return;
-    }
-    url+=`&Customer=${encodeURIComponent(Customer)}&MailCustomer=${encodeURIComponent(MailCustomer)}&WebshopOrder=${encodeURIComponent(WebshopOrder)}&SurfcenterOrder=${encodeURIComponent(SurfcenterOrder)}`;
-  } else {
-    const Customer=$("newInvoiceCustomer").value.trim();
-    const MailCustomer=$("newInvoiceMailCustomer").value.trim();
-    const Accountmanager=isMasterLogin()?$("newInvoiceAccountmanagerSelect").value:accountmanagerName;
-    const SurfcenterOrder=$("newInvoiceSurfOrder").value.trim();
-    const Language=$("newInvoiceLanguage").value;
-    const Phone=combinePhone_($("newInvoicePhoneCountry").value,$("newInvoicePhoneNumber").value.trim());
-    if(!Customer||!MailCustomer||!Accountmanager||!SurfcenterOrder||!Language){
-      $("createMsg").innerHTML="<span style='color:var(--warn)'>Please fill all fields.</span>";
-      $("createBtn").disabled=false;
-      return;
-    }
-    url+=`&Customer=${encodeURIComponent(Customer)}&MailCustomer=${encodeURIComponent(MailCustomer)}&Accountmanager=${encodeURIComponent(Accountmanager)}&SurfcenterOrder=${encodeURIComponent(SurfcenterOrder)}&Language=${encodeURIComponent(Language)}&Phone=${encodeURIComponent(Phone)}`;
+  let url=`${API_BASE}?action=create&supplierKey=${encodeURIComponent(supplierKey)}&mode=${encodeURIComponent(ORDER_MODE_DROPSHIP)}`;
+  const Customer=$("newCustomer").value.trim();
+  const MailCustomer=$("newMailCustomer").value.trim();
+  const Supplier=$("newSupplier").value;
+  const DropshipmentOrder=$("newDropOrder").value.trim();
+  const SurfcenterOrder=$("newSurfOrder").value.trim();
+  if(!Customer||!MailCustomer||!Supplier||!DropshipmentOrder||!SurfcenterOrder){
+    $("createMsg").innerHTML="<span style='color:var(--warn)'>Please fill all fields.</span>";
+    $("createBtn").disabled=false;
+    return;
   }
+  url+=`&Customer=${encodeURIComponent(Customer)}&MailCustomer=${encodeURIComponent(MailCustomer)}&Supplier=${encodeURIComponent(Supplier)}&DropshipmentOrder=${encodeURIComponent(DropshipmentOrder)}&SurfcenterOrder=${encodeURIComponent(SurfcenterOrder)}`;
   const data=await jsonp(url).catch(()=>null);
   $("createBtn").disabled=false;
   if(!data?.ok){
@@ -1509,10 +1404,6 @@ $("logoutBtn").addEventListener("click",logout);
 $("saveBtn").addEventListener("click",save);
 $("createBtn").addEventListener("click",createOrder);
 $("historySearch").addEventListener("input",renderOrders);
-$("contactsSearch").addEventListener("input",renderContacts_);
-$("newInvoiceCustomer").addEventListener("input",checkDuplicateCustomer_);
-$("newInvoiceMailCustomer").addEventListener("input",checkDuplicateCustomer_);
-$("newInvoiceSurfOrder").addEventListener("input",checkDuplicateOrderNumber_);
 $("editCustomerSave").addEventListener("click",()=>upsertTemplate_("customer_upsert",findTpl_(customerTemplates,$("editCustomerLang").value)?.id||"",$("editCustomerLang").value,"DEFAULT",$("editCustomerSubject").value.trim(),$("editCustomerBodyText").value.trim(),$("editCustomerMsg"),loadAllTemplates_));
 $("editSupplierSave").addEventListener("click",()=>upsertTemplate_("supplier_upsert",findTpl_(supplierTemplates,$("editSupplierLang").value)?.id||"",$("editSupplierLang").value,"DEFAULT",$("editSupplierSubject").value.trim(),$("editSupplierBodyText").value.trim(),$("editSupplierMsg"),loadAllTemplates_));
 $("editInvoiceCustomerSave").addEventListener("click",()=>upsertTemplate_("customer2_upsert",findTpl_(invoiceCustomerTemplates,$("editInvoiceCustomerLang").value)?.id||"",$("editInvoiceCustomerLang").value,"DEFAULT",$("editInvoiceCustomerSubject").value.trim(),$("editInvoiceCustomerBodyText").value.trim(),$("editInvoiceCustomerMsg"),loadAllTemplates_));
@@ -1555,7 +1446,7 @@ setupToggle("editSupplierToggle","editSupplierBody","editSupplierPlus");
 setupToggle("editInvoiceCustomerToggle","editInvoiceCustomerBody","editInvoiceCustomerPlus");
 setupToggle("mailLogToggle","mailLogBody","mailLogPlus");
 setupToggle("completedToggle","completedBody","completedPlus");
-setupToggle("contactsToggle","contactsBody","contactsPlus",renderContacts_);
+setupToggle("contactsToggle","contactsBody","contactsPlus");
 (function init(){
   bindTokenButtons_();
   insertProductTokenButtons_();
